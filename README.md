@@ -40,7 +40,7 @@ https://thegreycorner.com/vulnserver.html
 
 Run the vulnerable application as admin from Windows, the app runs on port 9999. Then run run as admin the Immunity debugger and attach to it (and press run as when attaching Immunity pauses the execution).
 
-### Spiking (from Kali attacker)
+### Spiking
 Spiking is the process of fuzzing the app with inputs of many different lengths to try to break it to detect a buffer overflow.
 
 First, let's check the methods the vulnerable server provides:
@@ -85,7 +85,7 @@ s_string_variable("0");
 
 Run it:
 ```
-generic_send_tcp {{victim}} 9999 trun_splike.spk 0 0
+generic_send_tcp {{IP}} {{PORT}} trun_splike.spk 0 0
 ```
 
 Almost immediately the app crashes. If we check the value of the `EIP` registry on the debugger, it will contain 41414141, which is "AAAA". This indicates the instruction pointer was overwritten by the information sent by `generic_send_tcp`.
@@ -93,7 +93,7 @@ Almost immediately the app crashes. If we check the value of the `EIP` registry 
 ### Fuzzing
 After we know which method of the protocol is vulnerable to buffer overflow, we have to detect what part of the input string is overwriting the EIP.
 
-This script will send requests, adding 100 bytes every time, to see when the app crashes to determine more or less whats the size of the input that makes the app crash. `1.py`:
+This script will send requests, adding 100 bytes at a time, to see when the app crashes to determine more or less whats the size of the input that makes the app crash. `1.py`:
 ```
 #!/usr/bin/python
 import sys, socket
